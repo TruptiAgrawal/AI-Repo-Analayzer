@@ -1,14 +1,15 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from github_service import parse_repo_url, get_readme, get_file_tree
-from repo_reader import get_best_sample_file
-from prompt_builder import build_summary_prompt
+from repo_reader import get_best_sample_file, get_multiple_sample_files
+from prompt_builder import build_summary_prompt, build_multi_file_prompt
 from grok_client import ask_grok
 
 app = FastAPI()
 
 class RepoRequest(BaseModel):
     url: str
+    multi_file: bool = True  # Enable multi-file analysis by default
 
 @app.post("/analyze")
 def analyze_repo(request: RepoRequest):
@@ -26,12 +27,21 @@ def analyze_repo(request: RepoRequest):
             detail=f"Repo '{owner}/{repo}' not found or is empty/private."
         )
 
-    sample_code = get_best_sample_file(owner, repo, file_tree)
-    prompt      = build_summary_prompt(readme, file_tree, sample_code)
-    answer      = ask_grok(prompt)
+    # Use multi-file analysis if requested
+    if request.multi_file:
+        analyzed_files = get_multiple_sample_files(owner, repo, file_tree)
+        prompt = build_multi_file_prompt(readme, file_tree, analyzed_files)
+        analyzed_file_paths = [f["path"] for f in analyzed_files]
+    else:
+        sample_code = get_best_sample_file(owner, repo, file_tree)
+        prompt = build_summary_prompt(readme, file_tree, sample_code)
+        analyzed_file_paths = []
+    
+    answer = ask_grok(prompt)
 
     return {
-        "summary":   answer,
+        "summary": answer,
         "file_tree": file_tree[:30],
-        "repo":      f"{owner}/{repo}"
+        "repo": f"{owner}/{repo}",
+        "analyzed_files": analyzed_file_paths
     }
